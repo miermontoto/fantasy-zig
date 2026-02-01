@@ -70,11 +70,28 @@ pub fn main() !void {
 
 // Tests
 test "all tests" {
-    // Import test modules
+    // modelos
     _ = @import("models/position.zig");
     _ = @import("models/status.zig");
     _ = @import("models/trend.zig");
     _ = @import("models/player.zig");
+
+    // utilidades
     _ = @import("utils/format.zig");
     _ = @import("utils/date.zig");
+    _ = @import("utils/sort.zig");
+
+    // servicios
+    _ = @import("services/scraper/helpers.zig");
+    _ = @import("services/rating.zig");
+
+    // http
+    _ = @import("http/response.zig");
+
+    // test suite completa
+    _ = @import("tests/helpers_test.zig");
+    _ = @import("tests/json_test.zig");
+    _ = @import("tests/html_test.zig");
+    _ = @import("tests/rating_test.zig");
+    _ = @import("tests/models_test.zig");
 }

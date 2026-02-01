@@ -93,6 +93,7 @@ pub fn stripTags(allocator: std.mem.Allocator, html: []const u8) ![]const u8 {
 /// normaliza espacios en blanco (múltiples espacios → uno solo)
 pub fn normalizeWhitespace(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     var result: std.ArrayList(u8) = .{};
+    defer result.deinit(allocator);
     var last_was_space = true;
 
     for (text) |c| {

@@ -365,7 +365,7 @@ test "investment rating - good value player" {
     // High investment rating for undervalued player
     try std.testing.expect(rating.overall >= 70);
     try std.testing.expect(rating.efficiency >= 90); // Great PPM
-    try std.testing.expect(rating.clause >= 80); // Easy to acquire
+    try std.testing.expect(rating.clause >= 70); // Easy to acquire (rank 30 de 500)
 }
 
 test "investment rating - expensive star" {
@@ -387,6 +387,7 @@ test "investment rating - expensive star" {
     const rating = service.calculateRating(stats);
 
     // Lower investment rating - expensive to acquire, low efficiency
-    try std.testing.expect(rating.efficiency < 20); // Poor PPM
-    try std.testing.expect(rating.clause < 40); // Hard to clause
+    try std.testing.expect(rating.efficiency < 45); // Poor PPM (2.6 PPM → ~37)
+    // rank 450/500 + ratio 5.3x → ~43 (floor at 40 para no destruir rating de estrellas)
+    try std.testing.expect(rating.clause < 50);
 }

@@ -27,6 +27,8 @@ const CommunitiesResult = types.CommunitiesResult;
 const TopMarketResult = types.TopMarketResult;
 
 /// Check AJAX response status and extract data
+/// nota: esta función tiene un memory leak conocido - el parsed JSON no se libera
+/// porque el resultado contiene referencias a strings dentro del JSON
 pub fn checkAjaxResponse(allocator: std.mem.Allocator, json_str: []const u8) !std.json.Value {
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, json_str, .{}) catch {
         return ScraperError.InvalidJson;
