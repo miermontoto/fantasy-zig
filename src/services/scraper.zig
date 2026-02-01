@@ -62,7 +62,9 @@ pub const OffersResult = struct {
 };
 
 pub const CommunitiesResult = struct {
-    communities: []Community,
+    settings_hash: []const u8 = "",
+    commit_sha: []const u8 = "",
+    communities: []Community = &[_]Community{},
 };
 
 pub const TopMarketResult = struct {
@@ -76,12 +78,82 @@ pub const TopMarketResult = struct {
 const OwnerRecord = @import("../models/player.zig").OwnerRecord;
 
 pub const PlayerDetailsResult = struct {
+    name: ?[]const u8,
+    position: ?i32,
+    points: ?i32,
+    value: ?i64,
+    avg: ?f32,
+    starter: ?bool,
+    home_avg: ?f32,
+    away_avg: ?f32,
     values: []ValueChange,
     owners: []const OwnerRecord,
     goals: ?i32,
     matches: ?i32,
+    team_games: ?i32,
+    participation_rate: ?f32,
     clauses_rank: ?i32,
     clause: ?i64,
+    // Current owner info
+    owner_id: ?i64,
+    owner_name: ?[]const u8,
+    // Streak data (last 5 games points)
+    streak: []const i32,
+};
+
+pub const PlayerGameweekStats = struct {
+    minutes_played: ?i32,
+    goals: ?i32,
+    assists: ?i32,
+    own_goals: ?i32,
+    yellow_card: ?i32,
+    red_card: ?i32,
+    total_shots: ?i32,
+    shots_on_target: ?i32,
+    key_passes: ?i32,
+    big_chances_created: ?i32,
+    total_passes: ?i32,
+    accurate_passes: ?i32,
+    total_long_balls: ?i32,
+    accurate_long_balls: ?i32,
+    total_clearances: ?i32,
+    total_interceptions: ?i32,
+    duels_won: ?i32,
+    duels_lost: ?i32,
+    aerial_won: ?i32,
+    aerial_lost: ?i32,
+    possession_lost: ?i32,
+    touches: ?i32,
+    saves: ?i32,
+    goals_conceded: ?i32,
+    penalty_won: ?i32,
+    penalty_conceded: ?i32,
+    penalty_missed: ?i32,
+    penalty_saved: ?i32,
+    expected_assists: ?f32,
+};
+
+pub const PlayerGameweekResult = struct {
+    id: ?i64,
+    name: ?[]const u8,
+    position: ?i32,
+    gameweek: ?[]const u8,
+    minutes_played: ?i32,
+    // Match info
+    home_team: ?[]const u8,
+    away_team: ?[]const u8,
+    home_goals: ?i32,
+    away_goals: ?i32,
+    is_home: bool,
+    match_status: ?[]const u8,
+    // Points from different providers
+    points_fantasy: ?i32,
+    points_marca: ?i32,
+    points_md: ?i32,
+    points_as: ?i32,
+    points_mix: ?i32,
+    // Detailed stats
+    stats: PlayerGameweekStats,
 };
 
 pub const Scraper = struct {
@@ -123,12 +195,25 @@ pub const Scraper = struct {
         if (data != .object) return ScraperError.ParseError;
 
         var result = PlayerDetailsResult{
+            .name = null,
+            .position = null,
+            .points = null,
+            .value = null,
+            .avg = null,
+            .starter = null,
+            .home_avg = null,
+            .away_avg = null,
             .values = &[_]ValueChange{},
             .owners = &[_]OwnerRecord{},
             .goals = null,
             .matches = null,
+            .team_games = null,
+            .participation_rate = null,
             .clauses_rank = null,
             .clause = null,
+            .owner_id = null,
+            .owner_name = null,
+            .streak = &[_]i32{},
         };
 
         // Parse values array
@@ -166,19 +251,439 @@ pub const Scraper = struct {
             }
         }
 
+        // Parse points array to calculate participation
+        if (data.object.get("points")) |points_json| {
+            if (points_json == .array) {
+                var team_games: i32 = 0;
+                for (points_json.array.items) |item| {
+                    if (item != .object) continue;
+                    // Count games where team has played (teamPlayed == true)
+                    if (item.object.get("teamPlayed")) |tp| {
+                        if (tp == .bool and tp.bool) {
+                            team_games += 1;
+                        }
+                    }
+                }
+                result.team_games = team_games;
+
+                // Calculate participation rate
+                if (result.matches) |matches| {
+                    if (team_games > 0) {
+                        result.participation_rate = @as(f32, @floatFromInt(matches)) / @as(f32, @floatFromInt(team_games)) * 100.0;
+                    }
+                }
+            }
+        }
+
         // Parse player info
         if (data.object.get("player")) |player_info| {
             if (player_info == .object) {
+                if (player_info.object.get("name")) |n| {
+                    result.name = if (n == .string) n.string else null;
+                }
+                if (player_info.object.get("position")) |p| {
+                    result.position = if (p == .integer) @intCast(p.integer) else null;
+                }
+                if (player_info.object.get("points")) |p| {
+                    result.points = if (p == .integer) @intCast(p.integer) else null;
+                }
+                if (player_info.object.get("value")) |v| {
+                    result.value = if (v == .integer) v.integer else null;
+                }
+                if (player_info.object.get("avg")) |a| {
+                    result.avg = switch (a) {
+                        .integer => |i| @floatFromInt(i),
+                        .float => |f| @floatCast(f),
+                        else => null,
+                    };
+                }
                 if (player_info.object.get("clausesRanking")) |cr| {
                     result.clauses_rank = if (cr == .integer) @intCast(cr.integer) else null;
                 }
                 if (player_info.object.get("clause")) |cl| {
-                    result.clause = if (cl == .integer) cl.integer else null;
+                    if (cl == .object) {
+                        // clause is an object with .value field
+                        if (cl.object.get("value")) |v| {
+                            result.clause = if (v == .integer) v.integer else null;
+                        }
+                    } else if (cl == .integer) {
+                        // fallback for direct integer (legacy?)
+                        result.clause = cl.integer;
+                    }
+                }
+
+                // Parse current owner
+                if (player_info.object.get("owner")) |owner| {
+                    if (owner == .object) {
+                        if (owner.object.get("id")) |id| {
+                            result.owner_id = if (id == .integer) id.integer else null;
+                        }
+                        if (owner.object.get("name")) |n| {
+                            result.owner_name = if (n == .string) n.string else null;
+                        }
+                    }
+                }
+
+                // Parse streak (last 5 games points)
+                if (player_info.object.get("streak")) |streak_arr| {
+                    if (streak_arr == .array) {
+                        var streak: std.ArrayList(i32) = .{};
+                        for (streak_arr.array.items) |s| {
+                            if (s == .object) {
+                                if (s.object.get("points")) |p| {
+                                    if (p == .integer) {
+                                        try streak.append(self.allocator, @intCast(p.integer));
+                                    }
+                                }
+                            } else if (s == .integer) {
+                                try streak.append(self.allocator, @intCast(s.integer));
+                            }
+                        }
+                        result.streak = try streak.toOwnedSlice(self.allocator);
+                    }
+                }
+            }
+        }
+
+        // Parse starter status
+        if (data.object.get("starter")) |s| {
+            result.starter = if (s == .bool) s.bool else null;
+        }
+
+        // Parse home/away performance splits
+        if (data.object.get("home")) |home| {
+            if (home == .object) {
+                var it = home.object.iterator();
+                if (it.next()) |entry| {
+                    const stats = entry.value_ptr.*;
+                    if (stats == .object) {
+                        if (stats.object.get("avg")) |a| {
+                            result.home_avg = switch (a) {
+                                .integer => |i| @floatFromInt(i),
+                                .float => |f| @floatCast(f),
+                                else => null,
+                            };
+                        }
+                    }
+                }
+            }
+        }
+
+        if (data.object.get("away")) |away| {
+            if (away == .object) {
+                var it = away.object.iterator();
+                if (it.next()) |entry| {
+                    const stats = entry.value_ptr.*;
+                    if (stats == .object) {
+                        if (stats.object.get("avg")) |a| {
+                            result.away_avg = switch (a) {
+                                .integer => |i| @floatFromInt(i),
+                                .float => |f| @floatCast(f),
+                                else => null,
+                            };
+                        }
+                    }
                 }
             }
         }
 
         return result;
+    }
+
+    /// Parse player gameweek stats from /ajax/player-gameweek response
+    pub fn parsePlayerGameweek(self: *Self, json_str: []const u8) !PlayerGameweekResult {
+        const data = try self.checkAjaxResponse(json_str);
+        if (data != .object) return ScraperError.ParseError;
+
+        var result = PlayerGameweekResult{
+            .id = null,
+            .name = null,
+            .position = null,
+            .gameweek = null,
+            .minutes_played = null,
+            .home_team = null,
+            .away_team = null,
+            .home_goals = null,
+            .away_goals = null,
+            .is_home = false,
+            .match_status = null,
+            .points_fantasy = null,
+            .points_marca = null,
+            .points_md = null,
+            .points_as = null,
+            .points_mix = null,
+            .stats = .{
+                .minutes_played = null,
+                .goals = null,
+                .assists = null,
+                .own_goals = null,
+                .yellow_card = null,
+                .red_card = null,
+                .total_shots = null,
+                .shots_on_target = null,
+                .key_passes = null,
+                .big_chances_created = null,
+                .total_passes = null,
+                .accurate_passes = null,
+                .total_long_balls = null,
+                .accurate_long_balls = null,
+                .total_clearances = null,
+                .total_interceptions = null,
+                .duels_won = null,
+                .duels_lost = null,
+                .aerial_won = null,
+                .aerial_lost = null,
+                .possession_lost = null,
+                .touches = null,
+                .saves = null,
+                .goals_conceded = null,
+                .penalty_won = null,
+                .penalty_conceded = null,
+                .penalty_missed = null,
+                .penalty_saved = null,
+                .expected_assists = null,
+            },
+        };
+
+        // Basic info
+        if (data.object.get("id")) |v| result.id = if (v == .integer) v.integer else null;
+        if (data.object.get("name")) |v| result.name = if (v == .string) v.string else null;
+        if (data.object.get("position")) |v| result.position = if (v == .integer) @intCast(v.integer) else null;
+        if (data.object.get("gameweek")) |v| result.gameweek = if (v == .string) v.string else null;
+
+        // Match info
+        if (data.object.get("home")) |v| result.home_team = if (v == .string) v.string else null;
+        if (data.object.get("away")) |v| result.away_team = if (v == .string) v.string else null;
+        if (data.object.get("goals_home")) |v| result.home_goals = if (v == .integer) @intCast(v.integer) else null;
+        if (data.object.get("goals_away")) |v| result.away_goals = if (v == .integer) @intCast(v.integer) else null;
+        if (data.object.get("status")) |v| result.match_status = if (v == .string) v.string else null;
+
+        // Determine if home team
+        if (data.object.get("match_team_id")) |match_team| {
+            if (data.object.get("id_home")) |home_id| {
+                if (match_team == .integer and home_id == .integer) {
+                    result.is_home = match_team.integer == home_id.integer;
+                }
+            }
+        }
+
+        // Points from different providers
+        if (data.object.get("points_marca")) |v| result.points_marca = if (v == .integer) @intCast(v.integer) else null;
+        if (data.object.get("points_md")) |v| result.points_md = if (v == .integer) @intCast(v.integer) else null;
+        if (data.object.get("points_as")) |v| result.points_as = if (v == .integer) @intCast(v.integer) else null;
+        if (data.object.get("points_mix")) |v| result.points_mix = if (v == .integer) @intCast(v.integer) else null;
+        if (data.object.get("points_marca_stats")) |v| result.points_fantasy = if (v == .integer) @intCast(v.integer) else null;
+
+        // Parse detailed stats from the stats JSON string
+        if (data.object.get("stats")) |stats_str| {
+            if (stats_str == .string) {
+                const stats_parsed = std.json.parseFromSlice(std.json.Value, self.allocator, stats_str.string, .{}) catch null;
+                if (stats_parsed) |sp| {
+                    const stats = sp.value;
+                    if (stats == .object) {
+                        if (stats.object.get("minutesPlayed")) |v| {
+                            result.stats.minutes_played = if (v == .integer) @intCast(v.integer) else null;
+                            result.minutes_played = result.stats.minutes_played;
+                        }
+                        if (stats.object.get("goalAssist")) |v| result.stats.assists = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("totalShots")) |v| result.stats.total_shots = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("onTargetScoringAttempt")) |v| result.stats.shots_on_target = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("keyPass")) |v| result.stats.key_passes = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("bigChanceCreated")) |v| result.stats.big_chances_created = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("totalPass")) |v| result.stats.total_passes = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("accuratePass")) |v| result.stats.accurate_passes = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("totalLongBalls")) |v| result.stats.total_long_balls = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("accurateLongBalls")) |v| result.stats.accurate_long_balls = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("totalClearance")) |v| result.stats.total_clearances = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("totalInterceptions")) |v| result.stats.total_interceptions = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("wonContest")) |v| result.stats.duels_won = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("duelLost")) |v| result.stats.duels_lost = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("aerialWon")) |v| result.stats.aerial_won = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("aerialLost")) |v| result.stats.aerial_lost = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("possessionLostCtrl")) |v| result.stats.possession_lost = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("touches")) |v| result.stats.touches = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("saves")) |v| result.stats.saves = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("goalsAgainst")) |v| result.stats.goals_conceded = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("penaltyWon")) |v| result.stats.penalty_won = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("penaltyConceded")) |v| result.stats.penalty_conceded = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("penaltyMiss")) |v| result.stats.penalty_missed = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("penaltySave")) |v| result.stats.penalty_saved = if (v == .integer) @intCast(v.integer) else null;
+                        if (stats.object.get("expectedAssists")) |v| {
+                            result.stats.expected_assists = switch (v) {
+                                .float => |f| @floatCast(f),
+                                .integer => |i| @floatFromInt(i),
+                                else => null,
+                            };
+                        }
+                    }
+                }
+            }
+        }
+
+        // Parse goals/cards from marca_stats_rating_detailed_filtered
+        if (data.object.get("marca_stats_rating_detailed_filtered")) |rating_str| {
+            if (rating_str == .string) {
+                const rating_parsed = std.json.parseFromSlice(std.json.Value, self.allocator, rating_str.string, .{}) catch null;
+                if (rating_parsed) |rp| {
+                    const rating = rp.value;
+                    if (rating == .object) {
+                        if (rating.object.get("goals")) |g| {
+                            if (g == .object) {
+                                if (g.object.get("value")) |v| result.stats.goals = if (v == .integer) @intCast(v.integer) else null;
+                            }
+                        }
+                        if (rating.object.get("ownGoals")) |g| {
+                            if (g == .object) {
+                                if (g.object.get("value")) |v| result.stats.own_goals = if (v == .integer) @intCast(v.integer) else null;
+                            }
+                        }
+                        if (rating.object.get("yellowCard")) |g| {
+                            if (g == .object) {
+                                if (g.object.get("value")) |v| result.stats.yellow_card = if (v == .integer) @intCast(v.integer) else null;
+                            }
+                        }
+                        if (rating.object.get("redCard")) |g| {
+                            if (g == .object) {
+                                if (g.object.get("value")) |v| result.stats.red_card = if (v == .integer) @intCast(v.integer) else null;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /// Player list item from sw/players list response
+    pub const PlayersListItem = struct {
+        id: []const u8,
+        name: []const u8,
+        position: i32,
+        points: i32,
+        value: i64,
+        avg: f32,
+        team_img: []const u8,
+        player_img: []const u8,
+        owner_name: ?[]const u8,
+        clause: ?i64,
+        clauses_rank: ?i32,
+        streak: []const i32,
+    };
+
+    pub const PlayersListResult = struct {
+        players: []PlayersListItem,
+        total: i64,
+        offset: i64,
+    };
+
+    /// Parse players list from /ajax/sw/players response (with filters)
+    pub fn parsePlayersList(self: *Self, json_str: []const u8) !PlayersListResult {
+        const data = try self.checkAjaxResponse(json_str);
+        if (data != .object) return ScraperError.ParseError;
+
+        var players: std.ArrayList(PlayersListItem) = .{};
+
+        const players_arr = data.object.get("players") orelse return .{
+            .players = &[_]PlayersListItem{},
+            .total = 0,
+            .offset = 0,
+        };
+
+        if (players_arr != .array) return .{
+            .players = &[_]PlayersListItem{},
+            .total = 0,
+            .offset = 0,
+        };
+
+        for (players_arr.array.items) |item| {
+            if (item != .object) continue;
+
+            const id_int = if (item.object.get("id")) |i| (if (i == .integer) i.integer else continue) else continue;
+            const id = try std.fmt.allocPrint(self.allocator, "{d}", .{id_int});
+
+            const name = if (item.object.get("name")) |n| (if (n == .string) n.string else "") else "";
+            const position = if (item.object.get("position")) |p| (if (p == .integer) @as(i32, @intCast(p.integer)) else 4) else 4;
+            const points = if (item.object.get("points")) |p| (if (p == .integer) @as(i32, @intCast(p.integer)) else 0) else 0;
+            const value = if (item.object.get("value")) |v| (if (v == .integer) v.integer else 0) else 0;
+            const avg: f32 = if (item.object.get("avg")) |a| switch (a) {
+                .float => @floatCast(a.float),
+                .integer => @floatFromInt(a.integer),
+                else => 0.0,
+            } else 0.0;
+
+            const team_img = if (item.object.get("teamLogoUrl")) |t| (if (t == .string) t.string else "") else "";
+            const player_img = if (item.object.get("photoUrl")) |p| (if (p == .string) p.string else "") else "";
+
+            // Owner info
+            var owner_name: ?[]const u8 = null;
+            if (item.object.get("owner")) |owner| {
+                if (owner == .object) {
+                    if (owner.object.get("name")) |on| {
+                        if (on == .string) owner_name = on.string;
+                    }
+                }
+            }
+
+            // Clause info
+            var clause: ?i64 = null;
+            if (item.object.get("clause")) |cl| {
+                if (cl == .object) {
+                    if (cl.object.get("value")) |v| {
+                        clause = if (v == .integer) v.integer else null;
+                    }
+                } else if (cl == .integer) {
+                    clause = cl.integer;
+                }
+            }
+
+            const clauses_rank: ?i32 = if (item.object.get("clausesRanking")) |cr|
+                (if (cr == .integer) @as(i32, @intCast(cr.integer)) else null)
+            else
+                null;
+
+            // Parse streak (last games points)
+            var streak: std.ArrayList(i32) = .{};
+            if (item.object.get("streak")) |streak_arr| {
+                if (streak_arr == .array) {
+                    for (streak_arr.array.items) |s| {
+                        if (s == .object) {
+                            if (s.object.get("points")) |p| {
+                                if (p == .integer) {
+                                    try streak.append(self.allocator, @intCast(p.integer));
+                                }
+                            }
+                        } else if (s == .integer) {
+                            try streak.append(self.allocator, @intCast(s.integer));
+                        }
+                    }
+                }
+            }
+
+            try players.append(self.allocator, .{
+                .id = id,
+                .name = name,
+                .position = position,
+                .points = points,
+                .value = value,
+                .avg = avg,
+                .team_img = team_img,
+                .player_img = player_img,
+                .owner_name = owner_name,
+                .clause = clause,
+                .clauses_rank = clauses_rank,
+                .streak = try streak.toOwnedSlice(self.allocator),
+            });
+        }
+
+        const total = if (data.object.get("total")) |t| (if (t == .integer) t.integer else 0) else 0;
+        const offset = if (data.object.get("offset")) |o| (if (o == .integer) o.integer else 0) else 0;
+
+        return .{
+            .players = try players.toOwnedSlice(self.allocator),
+            .total = total,
+            .offset = offset,
+        };
     }
 
     /// Parse offers from /ajax/sw/offers-received response
@@ -251,10 +756,22 @@ pub const Scraper = struct {
         const data = try self.checkAjaxResponse(json_str);
         if (data != .object) return ScraperError.ParseError;
 
+        var result = CommunitiesResult{};
+
+        // Extract settingsHash
+        if (data.object.get("settingsHash")) |sh| {
+            if (sh == .string) result.settings_hash = sh.string;
+        }
+
+        // Extract commitSha
+        if (data.object.get("commitSha")) |cs| {
+            if (cs == .string) result.commit_sha = cs.string;
+        }
+
         var communities: std.ArrayList(Community) = .{};
 
-        const communities_obj = data.object.get("communities") orelse return .{ .communities = &[_]Community{} };
-        if (communities_obj != .object) return .{ .communities = &[_]Community{} };
+        const communities_obj = data.object.get("communities") orelse return result;
+        if (communities_obj != .object) return result;
 
         var it = communities_obj.object.iterator();
         while (it.next()) |entry| {
@@ -263,23 +780,54 @@ pub const Scraper = struct {
 
             const id = if (community.object.get("id")) |i| (if (i == .integer) i.integer else 0) else 0;
             const name = if (community.object.get("name")) |n| (if (n == .string) n.string else "") else "";
-            const icon = if (community.object.get("community_icon")) |i| (if (i == .string) i.string else "") else "";
+            const code = if (community.object.get("code")) |c| (if (c == .string) c.string else "") else "";
+            const id_competition = if (community.object.get("id_competition")) |ic| (if (ic == .integer) ic.integer else 0) else 0;
+            const mode = if (community.object.get("mode")) |m| (if (m == .string) m.string else "") else "";
+            const direct_transfer = if (community.object.get("direct_transfer")) |dt| (if (dt == .integer) @as(i32, @intCast(dt.integer)) else 0) else 0;
+            const max_debt = if (community.object.get("max_debt")) |md| (if (md == .integer) @as(i32, @intCast(md.integer)) else 0) else 0;
+            const community_icon = if (community.object.get("community_icon")) |ci| (if (ci == .string) ci.string else "") else "";
+            const id_uc = if (community.object.get("id_uc")) |iu| (if (iu == .integer) iu.integer else 0) else 0;
             const balance = if (community.object.get("balance")) |b| (if (b == .integer) b.integer else 0) else 0;
             const offer_count = if (community.object.get("offers")) |o| (if (o == .integer) @as(i32, @intCast(o.integer)) else 0) else 0;
+            const flag_emoji = if (community.object.get("flag_emoji")) |fe| (if (fe == .string) fe.string else "") else "";
+            const ts_pic: ?i64 = if (community.object.get("ts_pic")) |tp| (if (tp == .integer) tp.integer else null) else null;
+            const icon_url: ?[]const u8 = if (community.object.get("icon_url")) |iu| (if (iu == .string) iu.string else null) else null;
+            const prize: ?[]const u8 = if (community.object.get("prize")) |p| (if (p == .string) p.string else null) else null;
+            const updated: ?[]const u8 = if (community.object.get("updated")) |u| (if (u == .string) u.string else null) else null;
+            const sidebar_visible: ?i32 = if (community.object.get("sidebar_visible")) |sv| (if (sv == .integer) @as(i32, @intCast(sv.integer)) else null) else null;
+            const blocked: ?i32 = if (community.object.get("blocked")) |bl| (if (bl == .integer) @as(i32, @intCast(bl.integer)) else null) else null;
+            const mgid: ?[]const u8 = if (community.object.get("mgid")) |mg| (if (mg == .string) mg.string else null) else null;
+            const logo_url = if (community.object.get("logoUrl")) |lu| (if (lu == .string) lu.string else "") else "";
 
             const is_current = if (self.current_community_id) |cid| (id == cid) else false;
 
             try communities.append(self.allocator, .{
                 .id = id,
                 .name = name,
-                .icon = icon,
+                .code = code,
+                .id_competition = id_competition,
+                .mode = mode,
+                .direct_transfer = direct_transfer,
+                .max_debt = max_debt,
+                .community_icon = community_icon,
+                .id_uc = id_uc,
                 .balance = balance,
                 .offers = offer_count,
+                .flag_emoji = flag_emoji,
+                .ts_pic = ts_pic,
+                .icon_url = icon_url,
+                .prize = prize,
+                .updated = updated,
+                .sidebar_visible = sidebar_visible,
+                .blocked = blocked,
+                .mgid = mgid,
+                .logo_url = logo_url,
                 .current = is_current,
             });
         }
 
-        return .{ .communities = try communities.toOwnedSlice(self.allocator) };
+        result.communities = try communities.toOwnedSlice(self.allocator);
+        return result;
     }
 
     /// Parse top market from /ajax/sw/market response
@@ -555,34 +1103,206 @@ pub const Scraper = struct {
             .status = "",
         };
 
-        // Extract community name
-        if (extractBetween(html, "feed-top-community", "</div>")) |section| {
+        // Extract community name from feed-top-community .name span
+        if (std.mem.indexOf(u8, html, "feed-top-community")) |start| {
+            const section = html[start..@min(start + 500, html.len)];
             if (extractBetween(section, "<span>", "</span>")) |name| {
-                info.community = name;
+                info.community = std.mem.trim(u8, name, " \t\n\r");
             }
         }
 
-        // Extract balance
-        if (extractBetween(html, "balance-real-current\">", "<")) |balance| {
-            info.balance = balance;
+        // Extract balance (handle space before ">")
+        if (extractBetween(html, "balance-real-current \">", "<")) |balance| {
+            info.balance = std.mem.trim(u8, balance, " \t\n\r");
+        } else if (extractBetween(html, "balance-real-current\">", "<")) |balance| {
+            info.balance = std.mem.trim(u8, balance, " \t\n\r");
         }
 
         // Extract credits
-        if (extractBetween(html, "credits-count\">", "<")) |credits| {
-            info.credits = credits;
+        if (extractBetween(html, "credits-count \">", "<")) |credits| {
+            info.credits = std.mem.trim(u8, credits, " \t\n\r");
+        } else if (extractBetween(html, "credits-count\">", "<")) |credits| {
+            info.credits = std.mem.trim(u8, credits, " \t\n\r");
         }
 
-        // Extract gameweek
-        if (extractBetween(html, "gameweek__name\">", "<")) |gw| {
-            info.gameweek = gw;
+        // Extract gameweek name (may be empty, look for Jornada text elsewhere)
+        if (std.mem.indexOf(u8, html, "gameweek__name")) |gw_start| {
+            const gw_section = html[gw_start..@min(gw_start + 200, html.len)];
+            if (std.mem.indexOf(u8, gw_section, ">")) |gt| {
+                if (std.mem.indexOfPos(u8, gw_section, gt, "<")) |lt| {
+                    const gw_text = std.mem.trim(u8, gw_section[gt + 1 .. lt], " \t\n\r");
+                    if (gw_text.len > 0) {
+                        info.gameweek = gw_text;
+                    }
+                }
+            }
         }
 
-        // Extract gameweek status
-        if (extractBetween(html, "gameweek__status\">", "<")) |status| {
-            info.status = status;
+        // Extract gameweek status (class may have modifiers like --playing)
+        if (std.mem.indexOf(u8, html, "gameweek__status")) |status_start| {
+            const status_section = html[status_start..@min(status_start + 300, html.len)];
+            if (std.mem.indexOf(u8, status_section, ">")) |gt| {
+                if (std.mem.indexOfPos(u8, status_section, gt, "<")) |lt| {
+                    const status_text = std.mem.trim(u8, status_section[gt + 1 .. lt], " \t\n\r");
+                    if (status_text.len > 0) {
+                        info.status = status_text;
+                    }
+                }
+            }
         }
 
         return info;
+    }
+
+    /// Parse market players from feed page (card-market_unified section)
+    pub fn parseFeedMarket(self: *Self, html: []const u8) ![]MarketPlayer {
+        var players: std.ArrayList(MarketPlayer) = .{};
+
+        // Find the card-market_unified section
+        const market_start = std.mem.indexOf(u8, html, "card-market_unified") orelse return players.items;
+        const market_end = std.mem.indexOfPos(u8, html, market_start, "</ul>") orelse html.len;
+        const market_section = html[market_start..market_end];
+
+        // Parse each player-row
+        var pos: usize = 0;
+        while (std.mem.indexOfPos(u8, market_section, pos, "player-row")) |row_start| {
+            const next_row = std.mem.indexOfPos(u8, market_section, row_start + 10, "player-row") orelse market_section.len;
+            const player_html = market_section[row_start..next_row];
+
+            const player = self.parseFeedMarketPlayer(player_html) catch {
+                pos = row_start + 10;
+                continue;
+            };
+
+            try players.append(self.allocator, player);
+            pos = next_row;
+        }
+
+        return try players.toOwnedSlice(self.allocator);
+    }
+
+    fn parseFeedMarketPlayer(self: *Self, player_html: []const u8) !MarketPlayer {
+        // Extract player ID
+        const player_id = extractBetween(player_html, "data-id_player=\"", "\"") orelse return ScraperError.ParseError;
+
+        // Extract position from player-position data-position
+        var position_str: []const u8 = "4";
+        if (std.mem.indexOf(u8, player_html, "player-position")) |pos_start| {
+            const pos_section = player_html[pos_start..@min(pos_start + 100, player_html.len)];
+            position_str = extractBetween(pos_section, "data-position='", "'") orelse
+                extractBetween(pos_section, "data-position=\"", "\"") orelse "4";
+        }
+        const position = Position.fromString(position_str) orelse .forward;
+
+        // Extract team logo
+        var team_img: []const u8 = "";
+        if (std.mem.indexOf(u8, player_html, "team-logo")) |tl_start| {
+            const tl_section = player_html[tl_start..@min(tl_start + 200, player_html.len)];
+            team_img = extractBetween(tl_section, "src='", "'") orelse
+                extractBetween(tl_section, "src=\"", "\"") orelse "";
+        }
+
+        // Extract points
+        var points: i32 = 0;
+        if (extractBetween(player_html, "class=\"points\">", "</div>")) |pts| {
+            points = std.fmt.parseInt(i32, std.mem.trim(u8, pts, " \t\n\r"), 10) catch 0;
+        }
+
+        // Extract player image
+        var player_img: []const u8 = "";
+        if (std.mem.indexOf(u8, player_html, "player-avatar")) |pa_start| {
+            const pa_section = player_html[pa_start..@min(pa_start + 300, player_html.len)];
+            player_img = extractBetween(pa_section, "<img src=\"", "\"") orelse "";
+        }
+
+        // Extract name (strip SVG)
+        var name: []const u8 = "";
+        if (extractBetween(player_html, "class=\"name\">", "</div>")) |name_section| {
+            var name_clean = name_section;
+            if (std.mem.indexOf(u8, name_clean, "</svg>")) |svg_end| {
+                name_clean = name_clean[svg_end + 6 ..];
+            }
+            if (std.mem.indexOf(u8, name_clean, "<")) |tag_start| {
+                name_clean = name_clean[0..tag_start];
+            }
+            name = std.mem.trim(u8, name_clean, " \t\n\r");
+        }
+
+        // Extract value
+        const under_name = extractBetween(player_html, "class=\"underName\">", "</div>") orelse "";
+        const value = parseEuropeanNumber(under_name);
+
+        // Extract trend
+        var trend: Trend = .neutral;
+        if (std.mem.indexOf(u8, under_name, "value-arrow green")) |_| {
+            trend = .up;
+        } else if (std.mem.indexOf(u8, under_name, "value-arrow red")) |_| {
+            trend = .down;
+        }
+
+        // Extract average
+        var avg: f64 = 0.0;
+        if (std.mem.indexOf(u8, player_html, "class=\"avg")) |avg_pos| {
+            const avg_section = player_html[avg_pos..@min(avg_pos + 80, player_html.len)];
+            if (std.mem.indexOf(u8, avg_section, ">")) |gt| {
+                if (std.mem.indexOfPos(u8, avg_section, gt, "</div>")) |end| {
+                    avg = parseEuropeanDecimal(std.mem.trim(u8, avg_section[gt + 1 .. end], " \t\n\r"));
+                }
+            }
+        }
+
+        // Extract streak
+        var streak: std.ArrayList(i32) = .{};
+        if (std.mem.indexOf(u8, player_html, "class=\"streak\">")) |streak_start| {
+            const streak_end = std.mem.indexOfPos(u8, player_html, streak_start, "</div>") orelse player_html.len;
+            const streak_section = player_html[streak_start..streak_end];
+            var streak_pos: usize = 0;
+            while (std.mem.indexOfPos(u8, streak_section, streak_pos, "<span class=\"bg--")) |span_start| {
+                if (std.mem.indexOfPos(u8, streak_section, span_start, ">")) |gt| {
+                    if (std.mem.indexOfPos(u8, streak_section, gt, "</span>")) |span_end| {
+                        const val_str = std.mem.trim(u8, streak_section[gt + 1 .. span_end], " \t\n\r");
+                        if (val_str.len > 0 and val_str[0] != '-') {
+                            const streak_val = std.fmt.parseInt(i32, val_str, 10) catch 0;
+                            try streak.append(self.allocator, streak_val);
+                        }
+                        streak_pos = span_end;
+                        continue;
+                    }
+                }
+                break;
+            }
+        }
+
+        // Extract rival
+        var rival_img: []const u8 = "";
+        if (std.mem.indexOf(u8, player_html, "class=\"rival\">")) |r_start| {
+            const r_section = player_html[r_start..@min(r_start + 200, player_html.len)];
+            rival_img = extractBetween(r_section, "src='", "'") orelse
+                extractBetween(r_section, "src=\"", "\"") orelse "";
+        }
+
+        const id_copy = try self.allocator.dupe(u8, player_id);
+
+        return MarketPlayer{
+            .base = .{
+                .id = id_copy,
+                .name = name,
+                .position = position,
+                .value = value,
+                .average = avg,
+                .points = points,
+                .streak = try streak.toOwnedSlice(self.allocator),
+                .team_img = team_img,
+                .player_img = player_img,
+                .rival_img = rival_img,
+                .trend = trend,
+            },
+            .owner = "",
+            .asked_price = value,
+            .offered_by = "Libre",
+            .own = false,
+            .my_bid = null,
+        };
     }
 
     /// Parse balance info from market/team HTML footer
@@ -593,19 +1313,54 @@ pub const Scraper = struct {
             .max_debt = 0,
         };
 
-        if (extractBetween(html, "balance-real-current\">", "<")) |balance| {
-            info.current_balance = parseEuropeanNumber(balance);
+        // Note: class may have trailing space before ">" (e.g., 'balance-real-current ">')
+        if (extractBetween(html, "balance-real-current \">", "<")) |balance| {
+            info.current_balance = parseBalanceValue(balance);
+        } else if (extractBetween(html, "balance-real-current\">", "<")) |balance| {
+            info.current_balance = parseBalanceValue(balance);
         }
 
-        if (extractBetween(html, "balance-real-future\">", "<")) |balance| {
-            info.future_balance = parseEuropeanNumber(balance);
+        if (extractBetween(html, "balance-real-future \">", "<")) |balance| {
+            info.future_balance = parseBalanceValue(balance);
+        } else if (extractBetween(html, "balance-real-future\">", "<")) |balance| {
+            info.future_balance = parseBalanceValue(balance);
         }
 
-        if (extractBetween(html, "balance-real-maxdebt\">", "<")) |balance| {
-            info.max_debt = parseEuropeanNumber(balance);
+        if (extractBetween(html, "balance-real-maxdebt \">", "<")) |balance| {
+            info.max_debt = parseBalanceValue(balance);
+        } else if (extractBetween(html, "balance-real-maxdebt\">", "<")) |balance| {
+            info.max_debt = parseBalanceValue(balance);
         }
 
         return info;
+    }
+
+    /// Parse balance value handling both full (254.958.620) and abbreviated (255,0M) formats
+    fn parseBalanceValue(text: []const u8) i64 {
+        const trimmed = std.mem.trim(u8, text, " \t\n\r");
+
+        // Check for abbreviated format with M suffix (e.g., "255,0M" = 255,000,000)
+        if (std.mem.indexOf(u8, trimmed, "M")) |m_pos| {
+            const num_part = trimmed[0..m_pos];
+            const multiplier: i64 = 1_000_000;
+
+            // Handle decimal part (e.g., "255,0" -> 255.0 million)
+            if (std.mem.indexOf(u8, num_part, ",")) |comma_pos| {
+                const int_str = num_part[0..comma_pos];
+                const frac_str = num_part[comma_pos + 1 ..];
+                const int_part = std.fmt.parseInt(i64, int_str, 10) catch 0;
+                const frac_part = std.fmt.parseInt(i64, frac_str, 10) catch 0;
+                const frac_len: u6 = @intCast(frac_str.len);
+                const frac_divisor: i64 = std.math.pow(i64, 10, frac_len);
+                return int_part * multiplier + @divTrunc(frac_part * multiplier, frac_divisor);
+            } else {
+                const int_part = std.fmt.parseInt(i64, num_part, 10) catch 0;
+                return int_part * multiplier;
+            }
+        }
+
+        // Otherwise use standard European number parsing (254.958.620)
+        return parseEuropeanNumber(trimmed);
     }
 
     /// Parse standings from /standings HTML page
@@ -739,6 +1494,248 @@ pub const Scraper = struct {
             .played = if (played.len > 0) played else null,
             .myself = myself,
         };
+    }
+
+    /// Parse market players from /market HTML page
+    /// HTML structure: <ul class="player-list"><li class="player-X-Y" data-position="N" data-price="M">...</li></ul>
+    pub fn parseMarket(self: *Self, html: []const u8) !MarketResult {
+        var players: std.ArrayList(MarketPlayer) = .{};
+
+        // Find the player-list section
+        const list_start = std.mem.indexOf(u8, html, "player-list") orelse return .{
+            .market = &[_]MarketPlayer{},
+            .info = parseBalanceInfo(html),
+        };
+
+        // Parse each <li data-position=...> entry (player list items)
+        var pos: usize = list_start;
+        while (std.mem.indexOfPos(u8, html, pos, "<li data-position=")) |li_start| {
+            // Find the end of this <li> element (next <li or </ul>)
+            const next_li = std.mem.indexOfPos(u8, html, li_start + 20, "<li data-position=");
+            const ul_end = std.mem.indexOfPos(u8, html, li_start, "</ul>");
+            const li_end = if (next_li) |n| (if (ul_end) |u| @min(n, u) else n) else (ul_end orelse html.len);
+            const player_html = html[li_start..li_end];
+
+            // Extract player data
+            const player = self.parseMarketPlayerHtml(player_html) catch {
+                pos = li_start + 20;
+                continue;
+            };
+
+            try players.append(self.allocator, player);
+            pos = li_end;
+        }
+
+        return .{
+            .market = try players.toOwnedSlice(self.allocator),
+            .info = parseBalanceInfo(html),
+        };
+    }
+
+    fn parseMarketPlayerHtml(self: *Self, player_html: []const u8) !MarketPlayer {
+        // Extract player ID from data-id_player attribute
+        const player_id = extractBetween(player_html, "data-id_player=\"", "\"") orelse return ScraperError.ParseError;
+
+        // Extract position from data-position on the <li> element (handles both quote styles)
+        const position_str = extractBetween(player_html, "data-position=\"", "\"") orelse
+            extractBetween(player_html, "data-position='", "'") orelse "4";
+        const position = Position.fromString(position_str) orelse .forward;
+
+        // Extract asked price from data-price on the <li> element
+        const price_attr = extractBetween(player_html, "data-price=\"", "\"") orelse
+            extractBetween(player_html, "data-price='", "'") orelse "0";
+        var asked_price = parseEuropeanNumber(price_attr);
+
+        // Extract team logo from img.team-logo (handles both quote styles)
+        var team_img_src: []const u8 = "";
+        if (std.mem.indexOf(u8, player_html, "team-logo")) |team_logo_pos| {
+            const after_class = player_html[team_logo_pos..@min(team_logo_pos + 300, player_html.len)];
+            team_img_src = extractBetween(after_class, "src='", "'") orelse
+                extractBetween(after_class, "src=\"", "\"") orelse "";
+        }
+
+        // Extract points from data-points or .points element
+        var points: i32 = 0;
+        if (extractBetween(player_html, "data-points=\"", "\"")) |pts| {
+            points = std.fmt.parseInt(i32, pts, 10) catch 0;
+        } else if (extractBetween(player_html, "class=\"points\">", "<")) |pts| {
+            points = std.fmt.parseInt(i32, std.mem.trim(u8, pts, " \t\n\r"), 10) catch 0;
+        }
+
+        // Extract player image from .player-avatar img
+        var player_img: []const u8 = "";
+        if (std.mem.indexOf(u8, player_html, "player-avatar")) |avatar_pos| {
+            const avatar_section = player_html[avatar_pos..@min(avatar_pos + 500, player_html.len)];
+            player_img = extractBetween(avatar_section, "<img src=\"", "\"") orelse
+                extractBetween(avatar_section, "<img src='", "'") orelse "";
+        }
+
+        // Extract name from .name div (strip SVG status icons)
+        var name: []const u8 = "";
+        if (extractBetween(player_html, "class=\"name\">", "</div>")) |name_section| {
+            var name_clean = name_section;
+            // Strip leading SVG tag if present (status icons like injury/doubt)
+            if (std.mem.indexOf(u8, name_clean, "</svg>")) |svg_end| {
+                name_clean = name_clean[svg_end + 6 ..];
+            }
+            // Strip any trailing elements
+            if (std.mem.indexOf(u8, name_clean, "<")) |tag_start| {
+                name_clean = name_clean[0..tag_start];
+            }
+            name = std.mem.trim(u8, name_clean, " \t\n\r");
+        }
+
+        // Extract value from .underName (format: € 12.479.000)
+        const under_name = extractBetween(player_html, "class=\"underName\">", "</div>") orelse "";
+        const value = parseEuropeanNumber(under_name);
+
+        // Extract trend from .value-arrow
+        var trend: Trend = .neutral;
+        if (std.mem.indexOf(u8, under_name, "value-arrow green")) |_| {
+            trend = .up;
+        } else if (std.mem.indexOf(u8, under_name, "value-arrow red")) |_| {
+            trend = .down;
+        }
+
+        // Extract average from .avg (format: "5,0") - class may have modifiers like "avg fg--fair"
+        var avg: f64 = 0.0;
+        if (std.mem.indexOf(u8, player_html, "class=\"avg")) |avg_pos| {
+            const avg_section = player_html[avg_pos..@min(avg_pos + 100, player_html.len)];
+            if (std.mem.indexOf(u8, avg_section, ">")) |gt| {
+                if (std.mem.indexOfPos(u8, avg_section, gt, "</div>")) |end| {
+                    avg = parseEuropeanDecimal(std.mem.trim(u8, avg_section[gt + 1 .. end], " \t\n\r"));
+                }
+            }
+        }
+
+        // Extract streak from .streak span elements (format: <span class="bg--...">value</span>)
+        var streak: std.ArrayList(i32) = .{};
+        if (std.mem.indexOf(u8, player_html, "class=\"streak\">")) |streak_start| {
+            const streak_end = std.mem.indexOfPos(u8, player_html, streak_start, "</div>") orelse player_html.len;
+            const streak_section = player_html[streak_start..streak_end];
+            var streak_pos: usize = 0;
+            // Look for <span class="bg--...">value</span> patterns
+            while (std.mem.indexOfPos(u8, streak_section, streak_pos, "<span class=\"bg--")) |span_start| {
+                if (std.mem.indexOfPos(u8, streak_section, span_start, ">")) |gt| {
+                    if (std.mem.indexOfPos(u8, streak_section, gt, "</span>")) |span_end| {
+                        const value_str = std.mem.trim(u8, streak_section[gt + 1 .. span_end], " \t\n\r");
+                        // Handle "-" for no score
+                        if (value_str.len > 0 and value_str[0] != '-') {
+                            const streak_value = std.fmt.parseInt(i32, value_str, 10) catch 0;
+                            try streak.append(self.allocator, streak_value);
+                        }
+                        streak_pos = span_end;
+                        continue;
+                    }
+                }
+                break;
+            }
+        }
+
+        // Extract rival team logo from .rival img
+        var rival_img: []const u8 = "";
+        if (std.mem.indexOf(u8, player_html, "class=\"rival\">")) |rival_start| {
+            const rival_section = player_html[rival_start..@min(rival_start + 300, player_html.len)];
+            rival_img = extractBetween(rival_section, "src='", "'") orelse
+                extractBetween(rival_section, "src=\"", "\"") orelse "";
+        }
+
+        // Extract status from SVG use href (#injury, #doubt, #red, #five)
+        var status: Status = .none;
+        if (std.mem.indexOf(u8, player_html, "#injury")) |_| {
+            status = .injury;
+        } else if (std.mem.indexOf(u8, player_html, "#doubt")) |_| {
+            status = .doubt;
+        } else if (std.mem.indexOf(u8, player_html, "#red")) |_| {
+            status = .red;
+        } else if (std.mem.indexOf(u8, player_html, "#five")) |_| {
+            status = .five;
+        }
+
+        // Extract owner/offered_by from .date section (format: "Username ,")
+        var owner: []const u8 = "";
+        var offered_by: []const u8 = "Libre";
+        if (extractBetween(player_html, "class=\"date\">", "</div>")) |date_section| {
+            // Find end of owner name (comma or tag)
+            var owner_end = std.mem.indexOf(u8, date_section, ",") orelse date_section.len;
+            if (std.mem.indexOf(u8, date_section, "<")) |tag_start| {
+                if (tag_start < owner_end) owner_end = tag_start;
+            }
+            owner = std.mem.trim(u8, date_section[0..owner_end], " \t\n\r");
+            if (owner.len > 0) {
+                offered_by = owner;
+            }
+        }
+
+        // Check if free player (no owner or contains "Libre")
+        if (owner.len == 0 or std.mem.indexOf(u8, player_html, "Libre") != null) {
+            offered_by = "Libre";
+        }
+
+        // Fallback: extract price from button text if data-price was 0
+        if (asked_price == 0) {
+            if (std.mem.indexOf(u8, player_html, "btn-bid")) |btn_start| {
+                const btn_section = player_html[btn_start..@min(btn_start + 200, player_html.len)];
+                if (std.mem.indexOf(u8, btn_section, ">")) |gt| {
+                    if (std.mem.indexOfPos(u8, btn_section, gt, "</button>")) |btn_end| {
+                        asked_price = parseEuropeanNumber(btn_section[gt + 1 .. btn_end]);
+                    }
+                }
+            }
+        }
+        if (asked_price == 0) asked_price = value;
+
+        // Check for our bid (.btn-green.btn-bid)
+        var my_bid: ?i64 = null;
+        if (std.mem.indexOf(u8, player_html, "btn-green")) |green_start| {
+            const green_section = player_html[green_start..@min(green_start + 200, player_html.len)];
+            if (std.mem.indexOf(u8, green_section, ">")) |gt| {
+                if (std.mem.indexOfPos(u8, green_section, gt, "</button>")) |btn_end| {
+                    const bid_value = parseEuropeanNumber(green_section[gt + 1 .. btn_end]);
+                    if (bid_value > 0) my_bid = bid_value;
+                }
+            }
+        }
+
+        // Check if this is our own player (contains "En venta")
+        const own = std.mem.indexOf(u8, player_html, "En venta") != null;
+
+        // Allocate and copy the player ID
+        const id_copy = try self.allocator.dupe(u8, player_id);
+
+        return MarketPlayer{
+            .base = .{
+                .id = id_copy,
+                .name = name,
+                .position = position,
+                .value = value,
+                .average = avg,
+                .points = points,
+                .streak = try streak.toOwnedSlice(self.allocator),
+                .team_img = team_img_src,
+                .player_img = player_img,
+                .rival_img = rival_img,
+                .trend = trend,
+                .status = status,
+            },
+            .owner = owner,
+            .asked_price = asked_price,
+            .offered_by = offered_by,
+            .own = own,
+            .my_bid = my_bid,
+        };
+    }
+
+    /// Parse European decimal format (e.g., "8,5" -> 8.5)
+    fn parseEuropeanDecimal(text: []const u8) f64 {
+        if (std.mem.indexOf(u8, text, ",")) |comma_pos| {
+            const int_part = std.fmt.parseFloat(f64, text[0..comma_pos]) catch 0.0;
+            const frac_str = text[comma_pos + 1 ..];
+            const frac_part = std.fmt.parseFloat(f64, frac_str) catch 0.0;
+            const frac_divisor: f64 = @floatFromInt(std.math.pow(u64, 10, frac_str.len));
+            return int_part + frac_part / frac_divisor;
+        }
+        return std.fmt.parseFloat(f64, text) catch 0.0;
     }
 
     /// Parse team players from /team HTML page

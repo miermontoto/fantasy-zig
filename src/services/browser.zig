@@ -81,6 +81,12 @@ pub const Browser = struct {
         try args.append(self.allocator, "-H");
         try args.append(self.allocator, "X-Requested-With: XMLHttpRequest");
 
+        try args.append(self.allocator, "-H");
+        try args.append(self.allocator, "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
+
+        try args.append(self.allocator, "-H");
+        try args.append(self.allocator, "Accept-Language: es-ES,es;q=0.9,en;q=0.8");
+
         // Cookie with refresh token
         if (self.token_service.getRefreshToken()) |refresh| {
             try args.append(self.allocator, "-H");
@@ -173,8 +179,54 @@ pub const Browser = struct {
         return self.post("/ajax/sw/market", payload);
     }
 
-    pub fn topPlayers(self: *Self) ![]const u8 {
-        return self.post("/ajax/sw", "post=players&order=0");
+    /// Get list of players with filters
+    /// order: 0=points, 1=avg, 2=value, 3=name
+    pub fn playersList(self: *Self, options: PlayersListOptions) ![]const u8 {
+        const payload = try std.fmt.allocPrint(
+            self.allocator,
+            "post=players&filters%5Bposition%5D={d}&filters%5Bvalue_from%5D={d}&filters%5Bvalue_to%5D={d}&filters%5Bclause_from%5D={d}&filters%5Bclause_to%5D={d}&filters%5Bteam%5D={d}&filters%5Binjured%5D={d}&filters%5Bfavs%5D={d}&filters%5Bowner%5D={d}&filters%5Bbenched%5D={d}&filters%5Bstealable%5D={d}&offset={d}&order={d}&name={s}&parentElement=%23fg-content",
+            .{
+                options.position,
+                options.value_from,
+                options.value_to,
+                options.clause_from,
+                options.clause_to,
+                options.team,
+                @as(u8, if (options.injured) 1 else 0),
+                @as(u8, if (options.favs) 1 else 0),
+                options.owner,
+                @as(u8, if (options.benched) 1 else 0),
+                @as(u8, if (options.stealable) 1 else 0),
+                options.offset,
+                options.order,
+                options.name,
+            },
+        );
+        defer self.allocator.free(payload);
+        return self.post("/ajax/sw/players", payload);
+    }
+
+    pub const PlayersListOptions = struct {
+        position: u8 = 0, // 0=all, 1=GK, 2=DEF, 3=MID, 4=FWD
+        value_from: i64 = 0,
+        value_to: i64 = 999_999_999,
+        clause_from: i64 = 0,
+        clause_to: i64 = 999_999_999,
+        team: u8 = 0, // 0=all teams
+        injured: bool = false,
+        favs: bool = false,
+        owner: u8 = 0, // 0=all, 1=free, 2=owned
+        benched: bool = false,
+        stealable: bool = false,
+        offset: u32 = 0,
+        order: u8 = 0, // 0=points, 1=avg, 2=value, 3=name
+        name: []const u8 = "",
+    };
+
+    pub fn playerGameweek(self: *Self, player_id: []const u8, gameweek_id: []const u8) ![]const u8 {
+        const payload = try std.fmt.allocPrint(self.allocator, "id_player={s}&id_gameweek={s}", .{ player_id, gameweek_id });
+        defer self.allocator.free(payload);
+        return self.post("/ajax/player-gameweek", payload);
     }
 
     pub fn user(self: *Self, id: []const u8) ![]const u8 {
