@@ -10,7 +10,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Main executable
+    // Get mcp.zig dependency
+    const mcp_dep = b.dependency("mcp", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Main HTTP server executable
     const exe = b.addExecutable(.{
         .name = "fantasy-zig",
         .root_module = b.createModule(.{
@@ -25,7 +31,22 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
-    // Run command
+    // MCP server executable
+    const mcp_exe = b.addExecutable(.{
+        .name = "fantasy-mcp",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/mcp_server.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "mcp", .module = mcp_dep.module("mcp") },
+            },
+        }),
+    });
+
+    b.installArtifact(mcp_exe);
+
+    // Run command for HTTP server
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
@@ -34,6 +55,16 @@ pub fn build(b: *std.Build) void {
 
     const run_step = b.step("run", "Run the fantasy API server");
     run_step.dependOn(&run_cmd.step);
+
+    // Run command for MCP server
+    const run_mcp_cmd = b.addRunArtifact(mcp_exe);
+    run_mcp_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_mcp_cmd.addArgs(args);
+    }
+
+    const run_mcp_step = b.step("run-mcp", "Run the fantasy MCP server");
+    run_mcp_step.dependOn(&run_mcp_cmd.step);
 
     // Tests
     const exe_tests = b.addTest(.{
