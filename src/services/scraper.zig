@@ -608,6 +608,139 @@ pub const Scraper = struct {
         return info;
     }
 
+    /// Parse standings from /standings HTML page
+    pub fn parseStandings(self: *Self, html: []const u8) !StandingsResult {
+        var total_users: std.ArrayList(User) = .{};
+        var gameweek_users: std.ArrayList(User) = .{};
+
+        // Find the total standings panel
+        if (std.mem.indexOf(u8, html, "panel panel-total")) |total_start| {
+            // Find the end of the total panel (next panel or end)
+            const total_end = std.mem.indexOfPos(u8, html, total_start, "panel panel-gameweek") orelse html.len;
+            const total_html = html[total_start..total_end];
+
+            // Parse users in total standings
+            try self.parseStandingsUsers(total_html, &total_users);
+        }
+
+        // Find the gameweek standings panel
+        if (std.mem.indexOf(u8, html, "panel panel-gameweek")) |gw_start| {
+            const gw_html = html[gw_start..];
+
+            // Parse users in gameweek standings
+            try self.parseStandingsUsers(gw_html, &gameweek_users);
+        }
+
+        return .{
+            .total = try total_users.toOwnedSlice(self.allocator),
+            .gameweek = try gameweek_users.toOwnedSlice(self.allocator),
+        };
+    }
+
+    fn parseStandingsUsers(self: *Self, panel_html: []const u8, users: *std.ArrayList(User)) !void {
+        var pos: usize = 0;
+
+        // Each user entry starts with href="users/{id}/{name}"
+        while (std.mem.indexOfPos(u8, panel_html, pos, "href=\"users/")) |user_start| {
+            // Extract user ID from href
+            const id_start = user_start + 12; // len("href=\"users/")
+            const id_end = std.mem.indexOfPos(u8, panel_html, id_start, "/") orelse break;
+            const user_id = panel_html[id_start..id_end];
+
+            // Find the end of this user's entry (next user or end of list)
+            const next_user = std.mem.indexOfPos(u8, panel_html, id_end, "href=\"users/") orelse panel_html.len;
+            const user_html = panel_html[user_start..next_user];
+
+            // Parse user data
+            const user = self.parseStandingsUserHtml(user_id, user_html) catch {
+                pos = id_end;
+                continue;
+            };
+
+            try users.append(self.allocator, user);
+            pos = next_user;
+        }
+    }
+
+    fn parseStandingsUserHtml(self: *Self, user_id: []const u8, user_html: []const u8) !User {
+        // Extract position/rank
+        const position_str = extractBetween(user_html, "class=\"position\">", "</div>") orelse "0";
+        const position: i32 = std.fmt.parseInt(i32, std.mem.trim(u8, position_str, " \t\n\r"), 10) catch 0;
+
+        // Extract user avatar image
+        const avatar_section = extractBetween(user_html, "user-avatar", "</div>") orelse "";
+        const user_img = extractBetween(avatar_section, "src=\"", "\"") orelse "";
+
+        // Extract name
+        const name_section = extractBetween(user_html, "class=\"name", "</div>") orelse "";
+        const name_start = std.mem.indexOf(u8, name_section, ">") orelse 0;
+        const name = std.mem.trim(u8, name_section[name_start + 1 ..], " \t\n\r");
+
+        // Extract played info (e.g., "16 jugadores" or "8 / 11 Jugadores")
+        const played_section = extractBetween(user_html, "class=\"played\">", "</div>") orelse "";
+        const played = std.mem.trim(u8, played_section, " \t\n\r");
+
+        // Extract players count from played section
+        var players_count: ?i32 = null;
+        if (std.mem.indexOf(u8, played, "jugadores") != null or std.mem.indexOf(u8, played, "Jugadores") != null) {
+            // Try to extract the first number
+            var num_start: ?usize = null;
+            for (played, 0..) |c, i| {
+                if (c >= '0' and c <= '9') {
+                    if (num_start == null) num_start = i;
+                } else if (num_start != null) {
+                    const num_str = played[num_start.?..i];
+                    players_count = std.fmt.parseInt(i32, num_str, 10) catch null;
+                    break;
+                }
+            }
+        }
+
+        // Extract value from played section (e.g., "€ 483.164.000")
+        var value: ?i64 = null;
+        if (std.mem.indexOf(u8, played, "€")) |euro_pos| {
+            value = parseEuropeanNumber(played[euro_pos..]);
+            if (value == 0) value = null;
+        }
+
+        // Extract points
+        const points_section = extractBetween(user_html, "class=\"points\">", "</div>") orelse "";
+        // Points are before the <span> tag
+        const points_end = std.mem.indexOf(u8, points_section, "<") orelse points_section.len;
+        const points_str = std.mem.trim(u8, points_section[0..points_end], " \t\n\r");
+        // Remove dots from number (1.189 -> 1189)
+        var points: i32 = 0;
+        for (points_str) |c| {
+            if (c >= '0' and c <= '9') {
+                points = points * 10 + @as(i32, c - '0');
+            }
+        }
+
+        // Extract diff (e.g., "+268")
+        const diff = extractBetween(user_html, "class=\"diff\">", "</div>") orelse null;
+        const diff_trimmed = if (diff) |d| std.mem.trim(u8, d, " \t\n\r") else null;
+
+        // Check if this is the current user (me)
+        const myself = std.mem.indexOf(u8, user_html, "is-me") != null or
+            std.mem.indexOf(u8, user_html, "class=\"name is-me\"") != null;
+
+        // Copy user ID
+        const id_copy = try self.allocator.dupe(u8, user_id);
+
+        return User{
+            .id = id_copy,
+            .position = position,
+            .name = name,
+            .players_count = players_count,
+            .value = value,
+            .points = points,
+            .diff = diff_trimmed,
+            .user_img = if (user_img.len > 0) user_img else "https://mier.info/assets/favicon.svg",
+            .played = if (played.len > 0) played else null,
+            .myself = myself,
+        };
+    }
+
     /// Parse team players from /team HTML page
     pub fn parseTeam(self: *Self, html: []const u8) !TeamResult {
         var players: std.ArrayList(TeamPlayer) = .{};

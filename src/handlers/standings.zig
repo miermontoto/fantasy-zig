@@ -9,6 +9,8 @@ pub fn handle(ctx: *server.ServerContext, req: *httpz.Request, res: *httpz.Respo
     var browser = ctx.createBrowser();
     defer browser.deinit();
 
+    var scraper = ctx.createScraper();
+
     // Fetch standings HTML
     const html = browser.standings() catch |err| {
         res.setStatus(.internal_server_error);
@@ -21,6 +23,17 @@ pub fn handle(ctx: *server.ServerContext, req: *httpz.Request, res: *httpz.Respo
     };
     defer ctx.allocator.free(html);
 
+    // Parse standings
+    const standings = scraper.parseStandings(html) catch |err| {
+        res.setStatus(.internal_server_error);
+        try res.json(.{
+            .status = "error",
+            .message = "Failed to parse standings",
+            .@"error" = @errorName(err),
+        }, .{});
+        return;
+    };
+
     const timestamp = try date_utils.getCurrentTimestamp(ctx.allocator);
     defer ctx.allocator.free(timestamp);
 
@@ -28,12 +41,13 @@ pub fn handle(ctx: *server.ServerContext, req: *httpz.Request, res: *httpz.Respo
     try res.json(.{
         .status = "success",
         .data = .{
-            .total = &[_]u8{}, // TODO: Full HTML parsing
-            .gameweek = &[_]u8{}, // TODO: Full HTML parsing
+            .total = standings.total,
+            .gameweek = standings.gameweek,
+            .total_count = standings.total.len,
+            .gameweek_count = standings.gameweek.len,
         },
         .meta = .{
             .timestamp = timestamp,
-            .note = "Full standings parsing requires HTML parser integration",
         },
     }, .{});
 }
