@@ -7,21 +7,21 @@ pub fn formatNumber(allocator: std.mem.Allocator, num: i64) ![]const u8 {
     const is_negative = num < 0;
     var abs_num: u64 = if (is_negative) @intCast(-num) else @intCast(num);
 
-    var digits = std.ArrayList(u8).init(allocator);
-    defer digits.deinit();
+    var digits: std.ArrayList(u8) = .{};
+    defer digits.deinit(allocator);
 
     var count: usize = 0;
     while (abs_num > 0) {
         if (count > 0 and count % 3 == 0) {
-            try digits.append('.');
+            try digits.append(allocator, '.');
         }
-        try digits.append(@intCast('0' + @as(u8, @intCast(abs_num % 10))));
+        try digits.append(allocator, @intCast('0' + @as(u8, @intCast(abs_num % 10))));
         abs_num /= 10;
         count += 1;
     }
 
     if (is_negative) {
-        try digits.append('-');
+        try digits.append(allocator, '-');
     }
 
     // Reverse the result

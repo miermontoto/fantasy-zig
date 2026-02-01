@@ -25,7 +25,7 @@ This is a REST API service that scrapes Fantasy Marca (fantasy.marca.com) and pr
 
 **Browser** (`services/browser.zig`) - HTTP client using curl subprocess. Handles authentication headers (Cookie with refresh-token, X-Auth for community). Provides methods for both HTML pages (`feed()`, `market()`, `team()`, `standings()`) and AJAX JSON endpoints (`player()`, `playerGameweek()`, `offers()`, `communities()`, `topMarket()`).
 
-**Scraper** (`services/scraper.zig`) - Parses responses from Browser. Uses string-based HTML parsing (no external library) with `extractBetween()` and `extractAttribute()` helpers. JSON parsing uses Zig's standard library. Key methods: `parseMarket()`, `parseTeam()`, `parseStandings()`, `parseFeedInfo()`, `parseBalanceInfo()`.
+**Scraper** (`services/scraper.zig`) - Parses responses from Browser. Uses string-based HTML parsing (no external library) with `extractBetween()` and `extractAttribute()` helpers. JSON parsing uses Zig's standard library. Key methods: `parseMarket()`, `parseTeam()`, `parseStandings()`, `parseFeedInfo()`, `parseBalanceInfo()`. Module structure in `services/scraper/` (types.zig, helpers.zig).
 
 **TokenService** (`services/token.zig`) - Manages authentication tokens. Stores refresh token and per-community X-Auth tokens in `tokens.json`. Handles community switching.
 
@@ -35,7 +35,22 @@ This is a REST API service that scrapes Fantasy Marca (fantasy.marca.com) and pr
 2. Handler creates Browser from ServerContext
 3. Browser fetches from fantasy.marca.com with auth headers
 4. Scraper parses HTML/JSON response
-5. Handler applies filters/sorting, returns JSON
+5. Handler applies filters/sorting, returns JSON via `ctx.sendSuccess()`
+
+### Response Utilities
+
+Handlers use ServerContext helpers for consistent responses:
+- `ctx.sendSuccess(res, data)` - Standard success `{status, data, meta}`
+- `ctx.sendInternalError(res, msg, err)` - 500 error
+- `ctx.sendBadRequest(res, msg)` - 400 error
+- `ctx.sendNotFound(res, msg)` - 404 error
+
+### Sorting Utilities
+
+`utils/sort.zig` provides generic comparators:
+- `sort.byField(T, "field", asc)` - Sort by direct field
+- `sort.byNestedField(T, "outer", "inner", asc)` - Sort by nested field
+- `sort.sortMarketPlayers(T, slice, field, asc)` - Runtime field/direction for market
 
 ### Data Models
 

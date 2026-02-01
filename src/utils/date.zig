@@ -24,7 +24,7 @@ pub fn parseRelativeDate(text: []const u8) i64 {
     }
 
     // Check for "hace X días"
-    if (std.mem.indexOf(u8, lower, "día") or std.mem.indexOf(u8, lower, "dia")) |_| {
+    if (std.mem.indexOf(u8, lower, "día") != null or std.mem.indexOf(u8, lower, "dia") != null) {
         return extractNumber(lower) * 24 * 60;
     }
 

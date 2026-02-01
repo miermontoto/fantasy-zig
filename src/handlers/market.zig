@@ -1,7 +1,7 @@
 const std = @import("std");
 const httpz = @import("httpz");
 const server = @import("../http/server.zig");
-const date_utils = @import("../utils/date.zig");
+const sort = @import("../utils/sort.zig");
 const Position = @import("../models/position.zig").Position;
 const Scraper = @import("../services/scraper.zig").Scraper;
 const MarketPlayer = @import("../models/player.zig").MarketPlayer;
@@ -34,12 +34,7 @@ pub fn handle(ctx: *server.ServerContext, req: *httpz.Request, res: *httpz.Respo
 
     // Fetch market HTML
     const html = browser.market() catch |err| {
-        res.setStatus(.internal_server_error);
-        try res.json(.{
-            .status = "error",
-            .message = "Failed to fetch market",
-            .@"error" = @errorName(err),
-        }, .{});
+        try ctx.sendInternalError(res, "Failed to fetch market", err);
         return;
     };
     defer ctx.allocator.free(html);
@@ -47,12 +42,7 @@ pub fn handle(ctx: *server.ServerContext, req: *httpz.Request, res: *httpz.Respo
     // Parse market data
     var scraper = Scraper.init(ctx.allocator, null);
     const market_result = scraper.parseMarket(html) catch |err| {
-        res.setStatus(.internal_server_error);
-        try res.json(.{
-            .status = "error",
-            .message = "Failed to parse market data",
-            .@"error" = @errorName(err),
-        }, .{});
+        try ctx.sendInternalError(res, "Failed to parse market data", err);
         return;
     };
 
@@ -96,53 +86,19 @@ pub fn handle(ctx: *server.ServerContext, req: *httpz.Request, res: *httpz.Respo
         try filtered_players.append(ctx.allocator, player);
     }
 
-    // Sort players
+    // Sort players using generic comparator
     const players_slice = filtered_players.items;
-    if (std.mem.eql(u8, sort_by, "points")) {
-        if (std.mem.eql(u8, sort_dir, "asc")) {
-            std.mem.sort(MarketPlayer, players_slice, {}, sortByPointsAsc);
-        } else {
-            std.mem.sort(MarketPlayer, players_slice, {}, sortByPointsDesc);
-        }
-    } else if (std.mem.eql(u8, sort_by, "value")) {
-        if (std.mem.eql(u8, sort_dir, "asc")) {
-            std.mem.sort(MarketPlayer, players_slice, {}, sortByValueAsc);
-        } else {
-            std.mem.sort(MarketPlayer, players_slice, {}, sortByValueDesc);
-        }
-    } else if (std.mem.eql(u8, sort_by, "price")) {
-        if (std.mem.eql(u8, sort_dir, "asc")) {
-            std.mem.sort(MarketPlayer, players_slice, {}, sortByPriceAsc);
-        } else {
-            std.mem.sort(MarketPlayer, players_slice, {}, sortByPriceDesc);
-        }
-    } else if (std.mem.eql(u8, sort_by, "average")) {
-        if (std.mem.eql(u8, sort_dir, "asc")) {
-            std.mem.sort(MarketPlayer, players_slice, {}, sortByAvgAsc);
-        } else {
-            std.mem.sort(MarketPlayer, players_slice, {}, sortByAvgDesc);
-        }
-    }
+    sort.sortMarketPlayers(MarketPlayer, players_slice, sort_by, std.mem.eql(u8, sort_dir, "asc"));
 
-    const timestamp = try date_utils.getCurrentTimestamp(ctx.allocator);
-    defer ctx.allocator.free(timestamp);
-
-    res.content_type = .JSON;
-    try res.json(.{
-        .status = "success",
-        .data = .{
-            .players = players_slice,
-            .info = .{
-                .current_balance = market_result.info.current_balance,
-                .future_balance = market_result.info.future_balance,
-                .max_debt = market_result.info.max_debt,
-            },
-            .count = players_slice.len,
+    try ctx.sendSuccess(res, .{
+        .players = players_slice,
+        .info = .{
+            .current_balance = market_result.info.current_balance,
+            .future_balance = market_result.info.future_balance,
+            .max_debt = market_result.info.max_debt,
         },
-        .meta = .{
-            .timestamp = timestamp,
-        },
-    }, .{});
+        .count = players_slice.len,
+    });
 }
 
 fn toLower(allocator: std.mem.Allocator, str: []const u8) ![]u8 {
@@ -151,36 +107,4 @@ fn toLower(allocator: std.mem.Allocator, str: []const u8) ![]u8 {
         result[i] = std.ascii.toLower(c);
     }
     return result;
-}
-
-fn sortByPointsDesc(_: void, a: MarketPlayer, b: MarketPlayer) bool {
-    return a.base.points > b.base.points;
-}
-
-fn sortByPointsAsc(_: void, a: MarketPlayer, b: MarketPlayer) bool {
-    return a.base.points < b.base.points;
-}
-
-fn sortByValueDesc(_: void, a: MarketPlayer, b: MarketPlayer) bool {
-    return a.base.value > b.base.value;
-}
-
-fn sortByValueAsc(_: void, a: MarketPlayer, b: MarketPlayer) bool {
-    return a.base.value < b.base.value;
-}
-
-fn sortByPriceDesc(_: void, a: MarketPlayer, b: MarketPlayer) bool {
-    return a.asked_price > b.asked_price;
-}
-
-fn sortByPriceAsc(_: void, a: MarketPlayer, b: MarketPlayer) bool {
-    return a.asked_price < b.asked_price;
-}
-
-fn sortByAvgDesc(_: void, a: MarketPlayer, b: MarketPlayer) bool {
-    return a.base.average > b.base.average;
-}
-
-fn sortByAvgAsc(_: void, a: MarketPlayer, b: MarketPlayer) bool {
-    return a.base.average < b.base.average;
 }

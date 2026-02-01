@@ -272,7 +272,7 @@ fn getMarketHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.too
 
         const player_id = player.base.id orelse "?";
         if (status_str.len > 0) {
-            if (!std.mem.eql(u8, player.offered_by, "Libre")) {
+            if (!std.mem.eql(u8, player.offered_by, config.FREE_AGENT)) {
                 line = std.fmt.allocPrint(allocator, "ID:{s} | {s} ({s}) | {d} pts | avg {d:.1} | {d}€ | [{s}] | by {s}\n", .{
                     player_id,
                     player.base.name,
@@ -295,7 +295,7 @@ fn getMarketHandler(allocator: std.mem.Allocator, args: ?std.json.Value) mcp.too
                 }) catch continue;
             }
         } else {
-            if (!std.mem.eql(u8, player.offered_by, "Libre")) {
+            if (!std.mem.eql(u8, player.offered_by, config.FREE_AGENT)) {
                 line = std.fmt.allocPrint(allocator, "ID:{s} | {s} ({s}) | {d} pts | avg {d:.1} | {d}€ | by {s}\n", .{
                     player_id,
                     player.base.name,

@@ -1,4 +1,5 @@
 const std = @import("std");
+const config = @import("../config.zig");
 const Position = @import("position.zig").Position;
 const Status = @import("status.zig").Status;
 const Trend = @import("trend.zig").Trend;
@@ -94,7 +95,7 @@ pub const MarketPlayer = struct {
     base: Player,
     owner: []const u8 = "",
     asked_price: i64 = 0,
-    offered_by: []const u8 = "Libre",
+    offered_by: []const u8 = config.FREE_AGENT,
     own: bool = false,
     my_bid: ?i64 = null,
 
@@ -104,7 +105,7 @@ pub const MarketPlayer = struct {
     }
 
     pub fn isFree(self: MarketPlayer) bool {
-        return std.mem.eql(u8, self.offered_by, "Libre");
+        return std.mem.eql(u8, self.offered_by, config.FREE_AGENT);
     }
 };
 

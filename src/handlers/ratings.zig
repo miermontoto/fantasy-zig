@@ -1,5 +1,6 @@
 const std = @import("std");
 const httpz = @import("httpz");
+const config = @import("../config.zig");
 const server = @import("../http/server.zig");
 const date_utils = @import("../utils/date.zig");
 const Scraper = @import("../services/scraper.zig").Scraper;
@@ -427,7 +428,7 @@ pub fn handleTop(ctx: *server.ServerContext, req: *httpz.Request, res: *httpz.Re
         }
 
         // Fetch detailed stats for participation, value trends, and owner
-        var owner_name: []const u8 = player.owner_name orelse "Libre";
+        var owner_name: []const u8 = player.owner_name orelse config.FREE_AGENT;
         if (browser.player(player.id)) |details_json| {
             defer ctx.allocator.free(details_json);
             if (scraper.parsePlayer(details_json)) |details| {

@@ -15,6 +15,9 @@ const Event = @import("../models/event.zig").Event;
 const EventData = @import("../models/event.zig").EventData;
 const EventType = @import("../models/event.zig").EventType;
 
+// helpers compartidos del módulo scraper
+const helpers = @import("scraper/helpers.zig");
+
 pub const ScraperError = error{
     ParseError,
     InvalidJson,
@@ -1299,7 +1302,7 @@ pub const Scraper = struct {
             },
             .owner = "",
             .asked_price = value,
-            .offered_by = "Libre",
+            .offered_by = config.FREE_AGENT,
             .own = false,
             .my_bid = null,
         };
@@ -1654,7 +1657,7 @@ pub const Scraper = struct {
 
         // Extract owner/offered_by from .date section (format: "Username ,")
         var owner: []const u8 = "";
-        var offered_by: []const u8 = "Libre";
+        var offered_by: []const u8 = config.FREE_AGENT;
         if (extractBetween(player_html, "class=\"date\">", "</div>")) |date_section| {
             // Find end of owner name (comma or tag)
             var owner_end = std.mem.indexOf(u8, date_section, ",") orelse date_section.len;
@@ -1668,8 +1671,8 @@ pub const Scraper = struct {
         }
 
         // Check if free player (no owner or contains "Libre")
-        if (owner.len == 0 or std.mem.indexOf(u8, player_html, "Libre") != null) {
-            offered_by = "Libre";
+        if (owner.len == 0 or std.mem.indexOf(u8, player_html, config.FREE_AGENT) != null) {
+            offered_by = config.FREE_AGENT;
         }
 
         // Fallback: extract price from button text if data-price was 0
