@@ -49,6 +49,8 @@ pub fn handleList(ctx: *server.ServerContext, req: *httpz.Request, res: *httpz.R
         .meta = .{
             .timestamp = timestamp,
             .current_community = current_community,
+            .settings_hash = result.settings_hash,
+            .commit_sha = result.commit_sha,
         },
     }, .{});
 }
