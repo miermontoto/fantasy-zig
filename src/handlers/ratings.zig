@@ -24,12 +24,7 @@ pub fn handleMarket(ctx: *server.ServerContext, req: *httpz.Request, res: *httpz
 
     // Fetch market HTML
     const html = browser.market() catch |err| {
-        res.setStatus(.internal_server_error);
-        try res.json(.{
-            .status = "error",
-            .message = "Failed to fetch market",
-            .@"error" = @errorName(err),
-        }, .{});
+        try ctx.sendInternalError(res, "Failed to fetch market", err);
         return;
     };
     defer ctx.allocator.free(html);
@@ -37,12 +32,7 @@ pub fn handleMarket(ctx: *server.ServerContext, req: *httpz.Request, res: *httpz
     // Parse market data
     var scraper = Scraper.init(ctx.allocator, null);
     const market_result = scraper.parseMarket(html) catch |err| {
-        res.setStatus(.internal_server_error);
-        try res.json(.{
-            .status = "error",
-            .message = "Failed to parse market",
-            .@"error" = @errorName(err),
-        }, .{});
+        try ctx.sendInternalError(res, "Failed to parse market", err);
         return;
     };
 
@@ -99,7 +89,7 @@ pub fn handleMarket(ctx: *server.ServerContext, req: *httpz.Request, res: *httpz
             .rating = rating,
             .tier = RatingTier.fromScore(rating.overall).toString(),
             .owner = player.offered_by,
-            .asked_price = player.asked_price,
+            .asked_price = if (player.asked_price > 0) player.asked_price else null,
         });
     }
 
@@ -110,18 +100,13 @@ pub fn handleMarket(ctx: *server.ServerContext, req: *httpz.Request, res: *httpz
     const timestamp = try date_utils.getCurrentTimestamp(ctx.allocator);
     defer ctx.allocator.free(timestamp);
 
-    res.content_type = .JSON;
-    try res.json(.{
-        .status = "success",
-        .data = .{
-            .players = players_slice,
-            .count = players_slice.len,
-        },
-        .meta = .{
-            .timestamp = timestamp,
-            .details_fetched = fetch_details,
-        },
-    }, .{});
+    try ctx.sendSuccessWithMeta(res, .{
+        .players = players_slice,
+        .count = players_slice.len,
+    }, .{
+        .timestamp = timestamp,
+        .details_fetched = fetch_details,
+    });
 }
 
 /// Rate the user's team
@@ -136,12 +121,7 @@ pub fn handleTeam(ctx: *server.ServerContext, req: *httpz.Request, res: *httpz.R
 
     // Fetch team HTML
     const html = browser.team() catch |err| {
-        res.setStatus(.internal_server_error);
-        try res.json(.{
-            .status = "error",
-            .message = "Failed to fetch team",
-            .@"error" = @errorName(err),
-        }, .{});
+        try ctx.sendInternalError(res, "Failed to fetch team", err);
         return;
     };
     defer ctx.allocator.free(html);
@@ -149,17 +129,12 @@ pub fn handleTeam(ctx: *server.ServerContext, req: *httpz.Request, res: *httpz.R
     // Parse team data
     var scraper = Scraper.init(ctx.allocator, null);
     const team_result = scraper.parseTeam(html) catch |err| {
-        res.setStatus(.internal_server_error);
-        try res.json(.{
-            .status = "error",
-            .message = "Failed to parse team",
-            .@"error" = @errorName(err),
-        }, .{});
+        try ctx.sendInternalError(res, "Failed to parse team", err);
         return;
     };
 
     var rating_service = RatingService.init(null);
-    var rated_players: std.ArrayList(RatedTeamPlayer) = .{};
+    var rated_players: std.ArrayList(RatedPlayer) = .{};
     var total_rating: f32 = 0;
     var count: u32 = 0;
 
@@ -225,27 +200,22 @@ pub fn handleTeam(ctx: *server.ServerContext, req: *httpz.Request, res: *httpz.R
 
     // Sort by overall rating descending
     const players_slice = rated_players.items;
-    std.mem.sort(RatedTeamPlayer, players_slice, {}, sortByTeamRatingDesc);
+    std.mem.sort(RatedPlayer, players_slice, {}, sortByRatingDesc);
 
     const avg_rating = if (count > 0) total_rating / @as(f32, @floatFromInt(count)) else 0;
 
     const timestamp = try date_utils.getCurrentTimestamp(ctx.allocator);
     defer ctx.allocator.free(timestamp);
 
-    res.content_type = .JSON;
-    try res.json(.{
-        .status = "success",
-        .data = .{
-            .players = players_slice,
-            .count = players_slice.len,
-            .team_average_rating = avg_rating,
-            .team_tier = RatingTier.fromScore(avg_rating).toString(),
-        },
-        .meta = .{
-            .timestamp = timestamp,
-            .details_fetched = fetch_details,
-        },
-    }, .{});
+    try ctx.sendSuccessWithMeta(res, .{
+        .players = players_slice,
+        .count = players_slice.len,
+        .team_average_rating = avg_rating,
+        .team_tier = RatingTier.fromScore(avg_rating).toString(),
+    }, .{
+        .timestamp = timestamp,
+        .details_fetched = fetch_details,
+    });
 }
 
 /// Rate a single player with full details
@@ -255,34 +225,20 @@ pub fn handlePlayer(ctx: *server.ServerContext, req: *httpz.Request, res: *httpz
     defer browser.deinit();
 
     const player_id = req.param("id") orelse {
-        res.setStatus(.bad_request);
-        try res.json(.{
-            .status = "error",
-            .message = "Player ID is required",
-        }, .{});
+        try ctx.sendBadRequest(res, "Player ID is required");
         return;
     };
 
     // Fetch player details
     const details_json = browser.player(player_id) catch |err| {
-        res.setStatus(.internal_server_error);
-        try res.json(.{
-            .status = "error",
-            .message = "Failed to fetch player",
-            .@"error" = @errorName(err),
-        }, .{});
+        try ctx.sendInternalError(res, "Failed to fetch player", err);
         return;
     };
     defer ctx.allocator.free(details_json);
 
     var scraper = Scraper.init(ctx.allocator, null);
     const details = scraper.parsePlayer(details_json) catch |err| {
-        res.setStatus(.internal_server_error);
-        try res.json(.{
-            .status = "error",
-            .message = "Failed to parse player",
-            .@"error" = @errorName(err),
-        }, .{});
+        try ctx.sendInternalError(res, "Failed to parse player", err);
         return;
     };
 
@@ -309,47 +265,37 @@ pub fn handlePlayer(ctx: *server.ServerContext, req: *httpz.Request, res: *httpz
     var rating_service = RatingService.init(null);
     const rating = rating_service.calculateRating(stats);
 
-    const timestamp = try date_utils.getCurrentTimestamp(ctx.allocator);
-    defer ctx.allocator.free(timestamp);
-
-    res.content_type = .JSON;
-    try res.json(.{
-        .status = "success",
-        .data = .{
-            .id = player_id,
-            .name = stats.name,
-            .position = stats.position,
-            .value = stats.value,
-            .points = stats.points,
-            .average = stats.average,
-            .participation_rate = stats.participation_rate,
-            .matches = stats.matches,
-            .team_games = stats.team_games,
-            .clause = stats.clause,
-            .clauses_rank = stats.clauses_rank,
-            .ppm = stats.ppm,
-            .rating = .{
-                .overall = rating.overall,
-                .tier = RatingTier.fromScore(rating.overall).toString(),
-                .components = .{
-                    .value_trend = rating.value_trend,
-                    .participation = rating.participation,
-                    .efficiency = rating.efficiency,
-                    .performance = rating.performance,
-                    .form = rating.form,
-                    .clause = rating.clause,
-                },
-                .raw = .{
-                    .day_change = rating.raw.day_change,
-                    .week_change = rating.raw.week_change,
-                    .month_change = rating.raw.month_change,
-                },
+    try ctx.sendSuccess(res, .{
+        .id = player_id,
+        .name = stats.name,
+        .position = stats.position,
+        .value = stats.value,
+        .points = stats.points,
+        .average = stats.average,
+        .participation_rate = stats.participation_rate,
+        .matches = stats.matches,
+        .team_games = stats.team_games,
+        .clause = stats.clause,
+        .clauses_rank = stats.clauses_rank,
+        .ppm = stats.ppm,
+        .rating = .{
+            .overall = rating.overall,
+            .tier = RatingTier.fromScore(rating.overall).toString(),
+            .components = .{
+                .value_trend = rating.value_trend,
+                .participation = rating.participation,
+                .efficiency = rating.efficiency,
+                .performance = rating.performance,
+                .form = rating.form,
+                .clause = rating.clause,
+            },
+            .raw = .{
+                .day_change = rating.raw.day_change,
+                .week_change = rating.raw.week_change,
+                .month_change = rating.raw.month_change,
             },
         },
-        .meta = .{
-            .timestamp = timestamp,
-        },
-    }, .{});
+    });
 }
 
 /// Rate top players from the league
@@ -370,29 +316,19 @@ pub fn handleTop(ctx: *server.ServerContext, req: *httpz.Request, res: *httpz.Re
     const pool: usize = if (qs.get("pool")) |p| std.fmt.parseInt(usize, p, 10) catch 100 else 100;
 
     // Fetch players list (order=0 to get by points, we'll re-sort by rating)
-    const json = browser.playersList(.{
+    const json_data = browser.playersList(.{
         .order = 0, // Always fetch by points, then sort by rating
         .position = position,
         .owner = owner,
     }) catch |err| {
-        res.setStatus(.internal_server_error);
-        try res.json(.{
-            .status = "error",
-            .message = "Failed to fetch players list",
-            .@"error" = @errorName(err),
-        }, .{});
+        try ctx.sendInternalError(res, "Failed to fetch players list", err);
         return;
     };
-    defer ctx.allocator.free(json);
+    defer ctx.allocator.free(json_data);
 
     var scraper = Scraper.init(ctx.allocator, null);
-    const list_result = scraper.parsePlayersList(json) catch |err| {
-        res.setStatus(.internal_server_error);
-        try res.json(.{
-            .status = "error",
-            .message = "Failed to parse players list",
-            .@"error" = @errorName(err),
-        }, .{});
+    const list_result = scraper.parsePlayersList(json_data) catch |err| {
+        try ctx.sendInternalError(res, "Failed to parse players list", err);
         return;
     };
 
@@ -457,7 +393,6 @@ pub fn handleTop(ctx: *server.ServerContext, req: *httpz.Request, res: *httpz.Re
             .rating = rating,
             .tier = RatingTier.fromScore(rating.overall).toString(),
             .owner = owner_name,
-            .asked_price = 0,
         });
 
         processed += 1;
@@ -474,25 +409,22 @@ pub fn handleTop(ctx: *server.ServerContext, req: *httpz.Request, res: *httpz.Re
     const timestamp = try date_utils.getCurrentTimestamp(ctx.allocator);
     defer ctx.allocator.free(timestamp);
 
-    res.content_type = .JSON;
-    try res.json(.{
-        .status = "success",
-        .data = .{
-            .players = top_players,
-            .count = top_players.len,
-            .pool_size = processed,
-            .total_available = list_result.total,
-        },
-        .meta = .{
-            .timestamp = timestamp,
-            .position = position,
-            .owner = owner,
-            .limit = limit,
-            .pool = pool,
-        },
-    }, .{});
+    try ctx.sendSuccessWithMeta(res, .{
+        .players = top_players,
+        .count = top_players.len,
+        .pool_size = processed,
+        .total_available = list_result.total,
+    }, .{
+        .timestamp = timestamp,
+        .position = position,
+        .owner = owner,
+        .limit = limit,
+        .pool = pool,
+    });
 }
 
+/// struct unificado para jugadores con rating
+/// campos opcionales permiten representar tanto market como team players
 const RatedPlayer = struct {
     id: []const u8,
     name: []const u8,
@@ -504,29 +436,14 @@ const RatedPlayer = struct {
     participation_rate: ?f32,
     rating: PlayerRating,
     tier: []const u8,
-    owner: []const u8,
-    asked_price: i64,
-};
-
-const RatedTeamPlayer = struct {
-    id: []const u8,
-    name: []const u8,
-    position: ?i32,
-    value: i64,
-    points: i32,
-    average: f32,
-    ppm: f32,
-    participation_rate: ?f32,
-    rating: PlayerRating,
-    tier: []const u8,
-    selected: bool,
-    being_sold: bool,
+    // campos específicos de market (opcionales)
+    owner: ?[]const u8 = null,
+    asked_price: ?i64 = null,
+    // campos específicos de team (opcionales)
+    selected: ?bool = null,
+    being_sold: ?bool = null,
 };
 
 fn sortByRatingDesc(_: void, a: RatedPlayer, b: RatedPlayer) bool {
-    return a.rating.overall > b.rating.overall;
-}
-
-fn sortByTeamRatingDesc(_: void, a: RatedTeamPlayer, b: RatedTeamPlayer) bool {
     return a.rating.overall > b.rating.overall;
 }

@@ -25,6 +25,21 @@ pub fn sendSuccess(
     }, .{});
 }
 
+/// envía una respuesta exitosa con meta personalizado
+/// { status: "success", data: T, meta: M }
+pub fn sendSuccessWithMeta(
+    res: *httpz.Response,
+    data: anytype,
+    meta: anytype,
+) !void {
+    res.content_type = .JSON;
+    try res.json(.{
+        .status = "success",
+        .data = data,
+        .meta = meta,
+    }, .{});
+}
+
 /// envía una respuesta de error con formato estándar
 pub fn sendError(
     res: *httpz.Response,

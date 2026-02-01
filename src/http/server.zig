@@ -24,6 +24,12 @@ pub const ServerContext = struct {
         try response.sendSuccess(self.allocator, res, data);
     }
 
+    /// envía respuesta exitosa con meta personalizado
+    pub fn sendSuccessWithMeta(self: *ServerContext, res: *httpz.Response, data: anytype, meta: anytype) !void {
+        _ = self;
+        try response.sendSuccessWithMeta(res, data, meta);
+    }
+
     /// envía error interno del servidor
     pub fn sendInternalError(self: *ServerContext, res: *httpz.Response, message: []const u8, err: anyerror) !void {
         _ = self;
